@@ -4,7 +4,7 @@ Mail-In-A-Box custom DNS API client for go.
 # CLI tool
 
 ```sh
-go install github.com/luv2code/go-miabdns/cmd/miabdns@latest
+go install github.com/kiekerjan/go-miabdns/cmd/miabdns@latest
 
 # get a list of all domains defined:
 miabdns -email $MIAB_USER -password $MIAB_PASS -url "https://your-box/admin/dns/custom" -command list
