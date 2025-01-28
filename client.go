@@ -4,11 +4,16 @@ package gomiabdns
 import (
 	"context"
 	"encoding/json"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"log/slog"
+	"time"
+	
+	"github.com/pquerna/otp/totp"
 )
 
 // RecordType is the type of DNS Record. For ex. CNAME.
@@ -38,17 +43,24 @@ const (
 // Client provides a target for methods interacting with the DNS API.
 type Client struct {
 	ApiUrl *url.URL
+	email string
+	password string
+	totp_token string
 }
 
 // New returns a new client ready to call the provided endpoint.
-func New(apiUrl, email, password string) *Client {
+func New(apiUrl, email, password string, totp_token string) *Client {
 	parsedUrl, err := url.Parse(apiUrl)
-	parsedUrl.User = url.UserPassword(email, password)
+	//parsedUrl.User = url.UserPassword(email, password)
+	
 	if err != nil {
 		panic(err)
 	}
 	return &Client{
 		ApiUrl: parsedUrl,
+		email: email,
+		password: password,
+		totp_token: totp_token,
 	}
 }
 
@@ -57,10 +69,17 @@ func New(apiUrl, email, password string) *Client {
 // If one or the other of name and recordType are empty string, no records are returned.
 func (c *Client) GetHosts(ctx context.Context, name string, recordType RecordType) ([]DNSRecord, error) {
 	apiUrl := getApiWithPath(c.ApiUrl, name, recordType)
-	apiResp, err := doRequest(ctx, http.MethodGet, apiUrl.String(), "")
+	slog.Debug("apiUrl: " + apiUrl.String())
+	apiResp, err := c.doRequest(ctx, http.MethodGet, apiUrl.String(), "")
+	slog.Debug("apiResp: " + string(apiResp))
 	if err != nil {
 		return nil, err
 	}
+	// verify output
+	//apiRespStr := string(apiResp)
+	//if strings.HasPrefix(apiRespStr, "missing-totp-token") {
+	//	return nil, errors.New(apiRespStr)
+	//}
 	return unmarshalRecords(apiResp)
 }
 
@@ -77,7 +96,7 @@ func (c *Client) AddHost(ctx context.Context, name string, recordType RecordType
 		)
 	}
 	apiUrl := getApiWithPath(c.ApiUrl, name, recordType)
-	apiResp, err := doRequest(ctx, http.MethodPost, apiUrl.String(), value)
+	apiResp, err := c.doRequest(ctx, http.MethodPost, apiUrl.String(), value)
 	if err != nil {
 		return err
 	}
@@ -99,7 +118,7 @@ func (c *Client) UpdateHost(ctx context.Context, name string, recordType RecordT
 		)
 	}
 	apiUrl := getApiWithPath(c.ApiUrl, name, recordType)
-	apiResp, err := doRequest(ctx, http.MethodPut, apiUrl.String(), value)
+	apiResp, err := c.doRequest(ctx, http.MethodPut, apiUrl.String(), value)
 	if err != nil {
 		return err
 	}
@@ -113,7 +132,7 @@ func (c *Client) DeleteHost(ctx context.Context, name string, recordType RecordT
 		return fmt.Errorf("Missing parameter to DeleteHost. Name is required. name: %s", name)
 	}
 	apiUrl := getApiWithPath(c.ApiUrl, name, recordType)
-	apiResp, err := doRequest(ctx, http.MethodDelete, apiUrl.String(), value)
+	apiResp, err := c.doRequest(ctx, http.MethodDelete, apiUrl.String(), value)
 	if err != nil {
 		return err
 	}
@@ -121,7 +140,7 @@ func (c *Client) DeleteHost(ctx context.Context, name string, recordType RecordT
 	return nil
 }
 
-func doRequest(ctx context.Context, method, requestURL, value string) ([]byte, error) {
+func (c *Client) doRequest(ctx context.Context, method, requestURL, value string) ([]byte, error) {
 	var r io.Reader
 	if value != "" {
 		r = strings.NewReader(value)
@@ -130,6 +149,18 @@ func doRequest(ctx context.Context, method, requestURL, value string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Accept", "JSON")
+	req.Header.Add("Authorization", "Basic " + base64.StdEncoding.EncodeToString([]byte(c.email+":"+c.password)))
+	
+	if c.totp_token != "" {
+		token, err := totp.GenerateCode(c.totp_token, time.Now())
+		if err != nil {
+			slog.Error("Error generating TOTP token:", err)
+		}
+		fmt.Println("Generated TOTP token:", token)
+		req.Header.Add("x-auth-token", token)
+	}
+	
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err

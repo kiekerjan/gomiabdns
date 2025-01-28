@@ -7,25 +7,28 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"log/slog"
 
-	"github.com/luv2code/gomiabdns"
+	"github.com/kiekerjan/gomiabdns"
 	"golang.org/x/exp/slices"
 )
 
 var email string
 var password string
 var url string
+var totp string
 var command string
 var recordType string
 var recordName string
 var recordValue string
 
-var commands = []string{"list", "add", "update", "delete"}
+var commands = []string{"list", "add", "update", "delete", "zones", "zonefile"}
 
 func init() {
 	flag.StringVar(&command, "command", "list", "the command to perform: "+strings.Join(commands, ","))
 	flag.StringVar(&email, "email", "", "The email address of the admin user")
-	flag.StringVar(&url, "url", "", "The url of the endpoint for dns changes on your Mail-In-A-Box instance. Ex: https://box.mydomain.net/admin/dns/custom")
+	flag.StringVar(&url, "url", "", "The url of the endpoint for the admin API on your Mail-In-A-Box instance. Ex: https://box.mydomain.net/admin")
+	flag.StringVar(&totp, "totp", "", "The secret key to generate a TOTP token with. Only needed when multi factor authentication is enabled")
 	flag.StringVar(&password, "password", "", "The password of the admin user")
 	flag.StringVar(&recordType, "rtype", "", "The record type to act on (optional) defaults to 'A' ")
 	flag.StringVar(&recordName, "rname", "", "The record name to act on")
@@ -33,6 +36,13 @@ func init() {
 	flag.Parse()
 }
 func main() {
+	// config logging
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+        }
+	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
+	slog.SetDefault(logger)
+	
 	if command == "" {
 		command = "list"
 	}
@@ -40,7 +50,7 @@ func main() {
 		fmt.Println("The command argument must be a valid command: " + strings.Join(commands, ","))
 		return
 	}
-	c := gomiabdns.New(url, email, password)
+	c := gomiabdns.New(url, email, password, totp)
 	switch command {
 	case "list":
 		records, err := getRecords(c)
@@ -63,6 +73,10 @@ func main() {
 			panic(err)
 		}
 		fmt.Println("record deleted")
+	case "zones":
+		fmt.Println("Not implemented yet")
+	case "zonefile":
+		fmt.Println("Not implemented yet")
 	}
 }
 
