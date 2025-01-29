@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"log/slog"
 	"time"
 	
 	"github.com/pquerna/otp/totp"
@@ -51,7 +50,6 @@ type Client struct {
 // New returns a new client ready to call the provided endpoint.
 func New(apiUrl, email, password string, totp_token string) *Client {
 	parsedUrl, err := url.Parse(apiUrl)
-	//parsedUrl.User = url.UserPassword(email, password)
 	
 	if err != nil {
 		panic(err)
@@ -69,17 +67,10 @@ func New(apiUrl, email, password string, totp_token string) *Client {
 // If one or the other of name and recordType are empty string, no records are returned.
 func (c *Client) GetHosts(ctx context.Context, name string, recordType RecordType) ([]DNSRecord, error) {
 	apiUrl := getApiWithPath(c.ApiUrl, name, recordType)
-	slog.Debug("apiUrl: " + apiUrl.String())
 	apiResp, err := c.doRequest(ctx, http.MethodGet, apiUrl.String(), "")
-	slog.Debug("apiResp: " + string(apiResp))
 	if err != nil {
 		return nil, err
 	}
-	// verify output
-	//apiRespStr := string(apiResp)
-	//if strings.HasPrefix(apiRespStr, "missing-totp-token") {
-	//	return nil, errors.New(apiRespStr)
-	//}
 	return unmarshalRecords(apiResp)
 }
 
@@ -140,11 +131,37 @@ func (c *Client) DeleteHost(ctx context.Context, name string, recordType RecordT
 	return nil
 }
 
+// GetZones returns all zones that the MiaB box is responsible for.
+func (c *Client) GetZones(ctx context.Context) ([]DNSZone, error) {
+	apiUrl := c.ApiUrl.JoinPath("dns", "zones")
+	
+        //fmt.Println("apiUrl: " + apiUrl.String())
+        apiResp, err := c.doRequest(ctx, http.MethodGet, apiUrl.String(), "")
+        if err != nil {
+                return nil, err
+        }
+        return unmarshalZones(apiResp)
+}
+
+// GetZonefile returns the zonefile for the indicate zone
+func (c *Client) GetZonefile(ctx context.Context, zone string) (string, error) {
+	apiUrl := c.ApiUrl.JoinPath("dns", "zonefile", zone)
+
+        //fmt.Println("apiUrl: " + apiUrl.String())
+        apiResp, err := c.doRequest(ctx, http.MethodGet, apiUrl.String(), "")
+        if err != nil {
+                return "", err
+        }
+        //fmt.Println(string(apiResp))
+        return string(apiResp), nil
+}
+        
 func (c *Client) doRequest(ctx context.Context, method, requestURL, value string) ([]byte, error) {
 	var r io.Reader
 	if value != "" {
 		r = strings.NewReader(value)
 	}
+	//fmt.Println("Request URL: "  + requestURL)
 	req, err := http.NewRequestWithContext(ctx, method, requestURL, r)
 	if err != nil {
 		return nil, err
@@ -155,9 +172,10 @@ func (c *Client) doRequest(ctx context.Context, method, requestURL, value string
 	if c.totp_token != "" {
 		token, err := totp.GenerateCode(c.totp_token, time.Now())
 		if err != nil {
-			slog.Error("Error generating TOTP token:", err)
+			err := fmt.Errorf("Error generating TOTP token: " + err.Error())
+			return nil, err
 		}
-		fmt.Println("Generated TOTP token:", token)
+		//fmt.Println("Generated TOTP token:", token)
 		req.Header.Add("x-auth-token", token)
 	}
 	
@@ -165,18 +183,21 @@ func (c *Client) doRequest(ctx context.Context, method, requestURL, value string
 	if err != nil {
 		return nil, err
 	}
-
+	
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
+
 	if err = resp.Body.Close(); err != nil {
 		return nil, err
 	}
+	//fmt.Println(string(body))
 	return body, nil
 }
 
 func getApiWithPath(apiUrl *url.URL, name string, rtype RecordType) *url.URL {
+	apiUrl = apiUrl.JoinPath("dns", "custom")
 	if name != "" {
 		if rtype != "" {
 			return apiUrl.JoinPath(name, string(rtype))
@@ -190,9 +211,26 @@ func getApiWithPath(apiUrl *url.URL, name string, rtype RecordType) *url.URL {
 func unmarshalRecords(data []byte) ([]DNSRecord, error) {
 	var result []DNSRecord
 	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, err
+		var errorResult APIStatus
+		if err2 := json.Unmarshal(data, &errorResult); err2 != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("Error while decoding json: " + errorResult.Reason)
 	}
 	return result, nil
+}
+
+func unmarshalZones(data []byte) ([]DNSZone, error) {
+        var result []DNSZone
+        //fmt.Println(string(data))
+        if err := json.Unmarshal(data, &result); err != nil {
+        	var errorResult APIStatus
+                if err2 := json.Unmarshal(data, &errorResult); err2 != nil {
+                        return nil, err
+                }
+                return nil, fmt.Errorf("Error while decoding json: " + errorResult.Reason)
+        }
+        return result, nil
 }
 
 // DNSRecord represents the host data returned from the API
@@ -205,4 +243,13 @@ type DNSRecord struct {
 	} `json:"sort-order"`
 	Value string `json:"value"`
 	Zone  string `json:"zone"`
+}
+
+// DNSZone represents the zone data returned from the API
+type DNSZone string
+
+// Represents status returned from the API
+type APIStatus struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
 }

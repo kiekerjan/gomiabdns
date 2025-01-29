@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
-	"log/slog"
 
 	"github.com/kiekerjan/gomiabdns"
 	"golang.org/x/exp/slices"
@@ -21,6 +20,7 @@ var command string
 var recordType string
 var recordName string
 var recordValue string
+var zone string
 
 var commands = []string{"list", "add", "update", "delete", "zones", "zonefile"}
 
@@ -33,16 +33,10 @@ func init() {
 	flag.StringVar(&recordType, "rtype", "", "The record type to act on (optional) defaults to 'A' ")
 	flag.StringVar(&recordName, "rname", "", "The record name to act on")
 	flag.StringVar(&recordValue, "rvalue", "", "The record value to act on")
+	flag.StringVar(&zone, "zone", "", "The zone for which to retrieve the zone file")
 	flag.Parse()
 }
 func main() {
-	// config logging
-	opts := &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-        }
-	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
-	slog.SetDefault(logger)
-	
 	if command == "" {
 		command = "list"
 	}
@@ -74,9 +68,20 @@ func main() {
 		}
 		fmt.Println("record deleted")
 	case "zones":
-		fmt.Println("Not implemented yet")
+		zones, err := getZones(c)
+		if err != nil {
+			panic(err)
+		}
+		printZones(zones)
 	case "zonefile":
-		fmt.Println("Not implemented yet")
+		if zone == "" {
+			panic(fmt.Errorf("Zone for which to retrieve the zonefile must be provided"))
+		}
+		zonefile, err := getZonefile(c, zone)
+		if err != nil {
+			panic(err)
+		}
+		printZonefile(zonefile, zone)
 	}
 }
 
@@ -129,4 +134,31 @@ func printRecords(records []gomiabdns.DNSRecord) {
 	if err := writer.Flush(); err != nil {
 		fmt.Printf("error flushing tab writer %s\n", err)
 	}
+}
+
+func getZones(c *gomiabdns.Client) ([]gomiabdns.DNSZone, error) {
+	records, err := c.GetZones(context.TODO())
+        if err != nil {
+                return nil, err
+        }
+        return records, nil
+}
+
+func printZones(zones []gomiabdns.DNSZone) {
+	for _, dz := range zones {
+		fmt.Println("Zone: " + dz)
+	}
+}
+
+func getZonefile(c *gomiabdns.Client, zone string) (string, error) {
+	zonefile, err := c.GetZonefile(context.TODO(), zone)
+	if err != nil {
+                return "", err
+        }
+	return zonefile, nil
+}
+
+func printZonefile(zonefile string, zone string) {
+	fmt.Println("Zonefile for zone: " + zone)
+	fmt.Printf(zonefile)
 }
