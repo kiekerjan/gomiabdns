@@ -12,8 +12,11 @@ import (
 	"strings"
 	"time"
 	
+	"github.com/tidwall/gjson"
 	"github.com/pquerna/otp/totp"
 )
+
+var apikey string
 
 // RecordType is the type of DNS Record. For ex. CNAME.
 type RecordType string
@@ -44,11 +47,11 @@ type Client struct {
 	ApiUrl *url.URL
 	email string
 	password string
-	totp_token string
+	totp_secret string
 }
 
 // New returns a new client ready to call the provided endpoint.
-func New(apiUrl, email, password string, totp_token string) *Client {
+func New(apiUrl, email, password string, totp_secret string) *Client {
 	parsedUrl, err := url.Parse(apiUrl)
 	
 	if err != nil {
@@ -58,7 +61,7 @@ func New(apiUrl, email, password string, totp_token string) *Client {
 		ApiUrl: parsedUrl,
 		email: email,
 		password: password,
-		totp_token: totp_token,
+		totp_secret: totp_secret,
 	}
 }
 
@@ -155,6 +158,72 @@ func (c *Client) GetZonefile(ctx context.Context, zone string) (string, error) {
         //fmt.Println(string(apiResp))
         return string(apiResp), nil
 }
+
+func (c *Client) doLogin(ctx context.Context) (error) {
+	requestURL := c.ApiUrl.JoinPath("login").String()
+	var r io.Reader
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, r)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "JSON")
+	if apikey != "" {
+		// already logged in
+		return nil
+	}
+	
+	req.Header.Add("Authorization", "Basic " + base64.StdEncoding.EncodeToString([]byte(c.email+":"+c.password)))
+	//fmt.Println("Current apikey: " + apikey)
+	
+	// If totp secret is configured, use it to generate a totp token
+	if c.totp_secret != "" {
+		token, err := totp.GenerateCode(c.totp_secret, time.Now())
+		if err != nil {
+			err := fmt.Errorf("Error generating TOTP token: " + err.Error())
+			return err
+		}
+		//fmt.Println("Generated TOTP token:", token)
+		req.Header.Add("x-auth-token", token)
+	}
+	
+	resp, err := http.DefaultClient.Do(req)
+	defer resp.Body.Close()
+	
+	if err != nil {
+		return err
+	}
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	
+	bodystr := string(body)
+	//fmt.Println(bodystr)
+	status := gjson.Get(bodystr, "status").String()
+	
+	if status == "ok" {
+		privileges := gjson.Get(bodystr, "privileges").String()
+		if !strings.Contains(privileges, "admin") {
+			err = fmt.Errorf("Account does not have admin priveleges")
+			return err
+		}
+		apikey = gjson.Get(bodystr, "api_key").String()
+		//fmt.Println("New apikey: " + apikey)
+	} else if status == "invalid" {
+		apikey = ""
+		reason := gjson.Get(bodystr, "reason").String()
+		err = fmt.Errorf("Invalid response: " + reason)
+		return err
+	} else {
+		apikey = ""
+		err = fmt.Errorf("Unforeseen return value: " + status)
+		return err
+	}
+	
+	//fmt.Println(string(body))
+	return nil
+}
         
 func (c *Client) doRequest(ctx context.Context, method, requestURL, value string) ([]byte, error) {
 	var r io.Reader
@@ -162,24 +231,25 @@ func (c *Client) doRequest(ctx context.Context, method, requestURL, value string
 		r = strings.NewReader(value)
 	}
 	//fmt.Println("Request URL: "  + requestURL)
+	err := c.doLogin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("Could not login: " + err.Error())
+	}
+	
+	if apikey == "" {
+		return nil, fmt.Errorf("Could not login")
+	}
+	
 	req, err := http.NewRequestWithContext(ctx, method, requestURL, r)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "JSON")
-	req.Header.Add("Authorization", "Basic " + base64.StdEncoding.EncodeToString([]byte(c.email+":"+c.password)))
-	
-	if c.totp_token != "" {
-		token, err := totp.GenerateCode(c.totp_token, time.Now())
-		if err != nil {
-			err := fmt.Errorf("Error generating TOTP token: " + err.Error())
-			return nil, err
-		}
-		//fmt.Println("Generated TOTP token:", token)
-		req.Header.Add("x-auth-token", token)
-	}
+	req.Header.Set("Accept", "json")
+	req.Header.Add("Authorization", "Basic " + base64.StdEncoding.EncodeToString([]byte(c.email + ":" + apikey)))
 	
 	resp, err := http.DefaultClient.Do(req)
+	defer resp.Body.Close()
+	
 	if err != nil {
 		return nil, err
 	}
@@ -188,10 +258,7 @@ func (c *Client) doRequest(ctx context.Context, method, requestURL, value string
 	if err != nil {
 		return nil, err
 	}
-
-	if err = resp.Body.Close(); err != nil {
-		return nil, err
-	}
+	
 	//fmt.Println(string(body))
 	return body, nil
 }
