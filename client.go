@@ -150,12 +150,10 @@ func (c *Client) GetZones(ctx context.Context) ([]DNSZone, error) {
 func (c *Client) GetZonefile(ctx context.Context, zone string) (string, error) {
 	apiUrl := c.ApiUrl.JoinPath("dns", "zonefile", zone)
 
-        //fmt.Println("apiUrl: " + apiUrl.String())
         apiResp, err := c.doRequest(ctx, http.MethodGet, apiUrl.String(), "")
         if err != nil {
                 return "", err
         }
-        //fmt.Println(string(apiResp))
         return string(apiResp), nil
 }
 
@@ -173,8 +171,7 @@ func (c *Client) doLogin(ctx context.Context) (error) {
 	}
 	
 	req.Header.Add("Authorization", "Basic " + base64.StdEncoding.EncodeToString([]byte(c.email+":"+c.password)))
-	//fmt.Println("Current apikey: " + apikey)
-	
+
 	// If totp secret is configured, use it to generate a totp token
 	if c.totp_secret != "" {
 		token, err := totp.GenerateCode(c.totp_secret, time.Now())
@@ -182,7 +179,6 @@ func (c *Client) doLogin(ctx context.Context) (error) {
 			err := fmt.Errorf("Error generating TOTP token: " + err.Error())
 			return err
 		}
-		//fmt.Println("Generated TOTP token:", token)
 		req.Header.Add("x-auth-token", token)
 	}
 	
@@ -199,7 +195,6 @@ func (c *Client) doLogin(ctx context.Context) (error) {
 	}
 	
 	bodystr := string(body)
-	//fmt.Println(bodystr)
 	status := gjson.Get(bodystr, "status").String()
 	
 	if status == "ok" {
@@ -209,7 +204,6 @@ func (c *Client) doLogin(ctx context.Context) (error) {
 			return err
 		}
 		apikey = gjson.Get(bodystr, "api_key").String()
-		//fmt.Println("New apikey: " + apikey)
 	} else if status == "invalid" {
 		apikey = ""
 		reason := gjson.Get(bodystr, "reason").String()
@@ -221,7 +215,6 @@ func (c *Client) doLogin(ctx context.Context) (error) {
 		return err
 	}
 	
-	//fmt.Println(string(body))
 	return nil
 }
         
@@ -230,7 +223,7 @@ func (c *Client) doRequest(ctx context.Context, method, requestURL, value string
 	if value != "" {
 		r = strings.NewReader(value)
 	}
-	//fmt.Println("Request URL: "  + requestURL)
+
 	err := c.doLogin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("Could not login: " + err.Error())
@@ -259,7 +252,6 @@ func (c *Client) doRequest(ctx context.Context, method, requestURL, value string
 		return nil, err
 	}
 	
-	//fmt.Println(string(body))
 	return body, nil
 }
 
